@@ -1,0 +1,2 @@
+# ScriptForChatGPT
+ChatGPTを便利に使うための魔法のスクリプト集

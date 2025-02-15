@@ -9,11 +9,8 @@ def extract_file_path(line: str) -> str | None:
     行からファイルパスを抽出します。以下の形式に対応：
       - "File: backend/docker-compose.yaml"
       - "## backend/docker-compose.yaml"
-      - "**backend/docker-compose.yaml**"
-      - "- **backend/docker-compose.yaml**"
-      - "1. **backend/docker-compose.yaml**"
-      - 単独行で "backend/docker-compose.yaml"
-    空行などの場合は None を返します。
+      - "1. **backend/docker-compose.yaml**" などのMarkdown装飾付き
+      - 単独行で "data_quality_manager.py" など（拡張子が含まれる場合）
     """
     s = line.strip()
     if not s:
@@ -25,7 +22,7 @@ def extract_file_path(line: str) -> str | None:
         r"^#+\s*(.+)$",  # # backend/docker-compose.yaml  または ## 〜
         r"^\d+\.\s*\*\*(.+?)\*\*$",  # 1. **backend/docker-compose.yaml**
         r"^-+\s*\*\*(.+?)\*\*$",  # - **backend/docker-compose.yaml**
-        r"^-?\s*\*\*(.+?)\*\*$",  # **backend/docker-compose.yaml**  (前に - もあり得る)
+        r"^-?\s*\*\*(.+?)\*\*$",  # **backend/docker-compose.yaml** (前に - があっても)
         r"^\*\*(.+?)\*\*$",  # **backend/docker-compose.yaml**
     ]
     for pat in patterns:
@@ -33,9 +30,27 @@ def extract_file_path(line: str) -> str | None:
         if m:
             candidate = m.group(1).strip()
             return candidate
-    # それ以外で、行内に "/" があり、改行以外の文字が含まれるなら、ファイルパスとみなす
+
+    # 拡張子が含まれる単独行とみなす（よく使う拡張子のリスト）
+    known_exts = (
+        ".py",
+        ".txt",
+        ".md",
+        ".yaml",
+        ".yml",
+        ".json",
+        ".dockerfile",
+        ".sh",
+        ".html",
+        ".css",
+    )
+    if s.endswith(known_exts):
+        return s
+
+    # "/" が含まれていればファイルパスとみなす
     if "/" in s:
         return s
+
     return None
 
 
@@ -46,7 +61,8 @@ def save_file(
     指定された file_path（ドキュメントルートからの相対パス）に対して、
     code_lines の内容を保存します。必要なディレクトリがなければ作成します。
     """
-    target_path = os.path.join(doc_root, file_path)
+    normalized_path = os.path.normpath(file_path)
+    target_path = os.path.join(doc_root, normalized_path)
     os.makedirs(os.path.dirname(target_path), exist_ok=True)
     with open(target_path, "w", encoding="utf-8") as f:
         f.writelines(code_lines)
@@ -58,7 +74,7 @@ def save_file(
 def main():
     parser = argparse.ArgumentParser(
         description="Markdownファイルから各ファイルを復元するスクリプトです。\n"
-        "入力Markdownは、各ファイルパスが単独行やMarkdownヘッダーとして記載され、その後にコードブロックが続く形式を想定します。"
+        "入力Markdownは、各ファイルパスが単独行またはMarkdownヘッダーとして記載され、その後にコードブロックが続く形式を想定します。"
     )
     parser.add_argument(
         "-i",
@@ -87,22 +103,22 @@ def main():
     with open(args.input, "r", encoding="utf-8") as f:
         lines = f.readlines()
 
-    current_file: str | None = None  # 現在のファイルパス（抽出済み）
-    code_lines: list[str] = []  # 現在のコードブロックの内容
-    inside_code_block = False  # コードブロック内かどうか
+    current_file: str | None = None
+    code_lines: list[str] = []
+    inside_code_block = False
 
     for line_number, line in enumerate(lines, start=1):
         stripped = line.strip()
         if debug:
             print(f"[DEBUG] Line {line_number}: {stripped}")
 
-        # 区切り行（==== など）は無視
+        # 区切り行（==== など）はスキップ
         if stripped.startswith("===="):
             if debug:
                 print(f"[DEBUG] Skipping separator line at {line_number}")
             continue
 
-        # コードブロックの開始／終了判定
+        # コードブロックの開始／終了の判定
         if stripped.startswith("```"):
             if not inside_code_block:
                 inside_code_block = True
@@ -134,12 +150,12 @@ def main():
                     f"[DEBUG] Appended line {line_number} to current code block (current file: {current_file})"
                 )
         else:
-            # コードブロック外：空行はスキップ
+            # コードブロック外で空行はスキップ
             if stripped == "":
                 if debug:
                     print(f"[DEBUG] Skipping empty line at {line_number}")
                 continue
-            # ファイルパス行とみなす
+            # ファイルパス行として抽出
             candidate = extract_file_path(line)
             if candidate:
                 current_file = candidate
@@ -151,7 +167,7 @@ def main():
                 if debug:
                     print(f"[DEBUG] No file header detected at line {line_number}")
 
-    # 最後にコードブロックが閉じられていない場合の対応
+    # 最後までコードブロックが閉じられていない場合の処理
     if inside_code_block and current_file and code_lines:
         if debug:
             print(f"[DEBUG] End of file reached. Saving last file '{current_file}'")
